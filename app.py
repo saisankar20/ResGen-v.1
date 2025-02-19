@@ -1,9 +1,14 @@
 from flask import Flask, request, jsonify
 import os
 import re
-import spacy
 from pdfminer.high_level import extract_text
 from docx import Document
+from rake_nltk import Rake
+import nltk
+
+# Download necessary NLTK resources
+nltk.download('stopwords')
+nltk.download('punkt_tab')
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -12,9 +17,6 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# Load spaCy English model
-nlp = spacy.load("en_core_web_sm")
 
 # ---------------------------
 # Utility Functions
@@ -39,64 +41,60 @@ def preprocess_text(text):
     """
     Preprocess the extracted text by removing extra whitespace.
     """
-    # Replace multiple spaces and newlines with a single space
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-def extract_keywords_spacy(text):
+def extract_keywords_rake(text):
     """
-    Use spaCy to extract keywords based on noun chunks and named entities.
+    Use RAKE (Rapid Automatic Keyword Extraction) to extract keywords.
     """
-    doc = nlp(text)
-    # Extract noun chunks as potential keywords
-    keywords = {chunk.text.lower() for chunk in doc.noun_chunks}
-    # Also add named entities
-    for ent in doc.ents:
-        keywords.add(ent.text.lower())
-    return list(keywords)
+    r = Rake()  # RAKE uses NLTK's stopwords by default
+    r.extract_keywords_from_text(text)
+    keywords = r.get_ranked_phrases()
+    return keywords
 
 # ---------------------------
-# API Endpoints
+# API Endpoint
 # ---------------------------
 
 @app.route('/process_resume', methods=['POST'])
 def process_resume():
-    """
-    API endpoint to upload a resume, extract text, preprocess it, 
-    and return extracted keywords.
-    """
-    # Check if a file is part of the request
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part in request'}), 400
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part in request'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
 
-    # Save the uploaded file to the configured folder
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    file.save(file_path)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+        file.save(file_path)
+        print("File saved at:", file_path)
 
-    # Determine file type and extract text accordingly
-    if file.filename.lower().endswith('.pdf'):
-        text = extract_text_from_pdf(file_path)
-    elif file.filename.lower().endswith('.docx'):
-        text = extract_text_from_docx(file_path)
-    else:
-        return jsonify({'error': 'Unsupported file type'}), 400
+        if file.filename.lower().endswith('.pdf'):
+            text = extract_text_from_pdf(file_path)
+        elif file.filename.lower().endswith('.docx'):
+            text = extract_text_from_docx(file_path)
+        else:
+            return jsonify({'error': 'Unsupported file type'}), 400
 
-    # Preprocess the extracted text
-    processed_text = preprocess_text(text)
-    # Extract keywords using spaCy
-    keywords = extract_keywords_spacy(processed_text)
+        print("Raw text extracted:", text[:100])  # Debug: first 100 characters
+        processed_text = preprocess_text(text)
+        print("Processed text:", processed_text[:100])  # Debug: first 100 characters
 
-    # Return the results as JSON
-    return jsonify({
-        'extracted_text': processed_text,
-        'keywords': keywords
-    }), 200
+        keywords = extract_keywords_rake(processed_text)
+        print("Extracted keywords:", keywords)
+
+        return jsonify({
+            'extracted_text': processed_text,
+            'keywords': keywords
+        }), 200
+
+    except Exception as e:
+        print("Error occurred:", e)
+        return jsonify({'error': str(e)}), 500
 
 # ---------------------------
-# Main
+# Main Entry Point
 # ---------------------------
 
 if __name__ == '__main__':
